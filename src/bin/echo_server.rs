@@ -7,18 +7,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Echo server in ascolto su :8080");
 
     loop {
-        // accept() restituisce (TcpStream, SocketAddr)
-        // Il TcpStream è owned — viene mosso nel blocco sotto
         let (mut socket, addr) = listener.accept().await?;
         println!("Connessione da {addr}");
 
-        // Gestione sequenziale (blocca l'accept di nuovi client!)
-        let mut buf = [0u8; 1024];
-        loop {
-            let n = socket.read(&mut buf).await?;
-            if n == 0 { break; } // client ha chiuso la connessione
-            socket.write_all(&buf[..n]).await?;
-        }
-        println!("Client {addr} disconnesso");
+        // `socket` viene MOVED nel task — ownership trasferita
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = match socket.read(&mut buf).await {
+                    Ok(0) => return,           // EOF: client disconnesso
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("Errore lettura da {addr}: {e}");
+                        return;
+                    }
+                };
+                if let Err(e) = socket.write_all(&buf[..n]).await {
+                    eprintln!("Errore scrittura verso {addr}: {e}");
+                    return;
+                }
+            }
+        });
     }
 }
