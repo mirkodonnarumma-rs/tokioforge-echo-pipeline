@@ -1,25 +1,36 @@
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
     let (tx, mut rx) = mpsc::channel::<String>(4);
 
     let producer = tokio::spawn(async move {
         for i in 0..20u32 {
             let msg = format!("msg-{i:02}");
-            println!("[P] Invio: {msg}");
-            tx.send(msg).await.unwrap();
+            info!(msg, "producer: invio");
+            if tx.send(msg).await.is_err() {
+                warn!("producer: receiver droppato, uscita anticipata");
+                return;
+            }
         }
-        println!("[P] Fine — sender droppato, canale si chiuderà.");
+        info!("producer: fine — sender droppato, canale si chiuderà");
     });
 
     let consumer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            println!("[C] Ricevuto: {msg}");
+            info!(msg, "consumer: ricevuto");
             sleep(Duration::from_millis(200)).await;
         }
-        println!("[C] Canale chiuso — consumer terminato.");
+        info!("consumer: canale chiuso — terminato");
     });
 
     let (p, c) = tokio::join!(producer, consumer);
@@ -39,7 +50,6 @@ mod tests {
             for i in 0..5u32 {
                 tx.send(i).await.unwrap();
             }
-            // tx droppato qui: rx.recv() tornerà None dopo l'ultimo messaggio
         });
 
         producer.await.unwrap();

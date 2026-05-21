@@ -3,6 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use tracing::{info, warn};
 
 async fn accept_or_shutdown(
     listener: &TcpListener,
@@ -14,22 +15,33 @@ async fn accept_or_shutdown(
     }
 }
 
-async fn handle_client(mut socket: TcpStream, mut shutdown_rx: watch::Receiver<bool>) {
+async fn handle_client(mut socket: TcpStream, addr: SocketAddr, mut shutdown_rx: watch::Receiver<bool>) {
+    info!(%addr, "client connesso");
     let mut buf = [0u8; 1024];
     loop {
         tokio::select! {
             result = socket.read(&mut buf) => {
                 match result {
-                    Ok(0) => return,
+                    Ok(0) => {
+                        info!(%addr, "client disconnesso (EOF)");
+                        return;
+                    }
                     Ok(n) => {
-                        if socket.write_all(&buf[..n]).await.is_err() {
+                        if let Err(e) = socket.write_all(&buf[..n]).await {
+                            warn!(%addr, "errore scrittura: {e}");
                             return;
                         }
                     }
-                    Err(_) => return,
+                    Err(e) => {
+                        warn!(%addr, "errore lettura: {e}");
+                        return;
+                    }
                 }
             }
-            _ = shutdown_rx.changed() => return,
+            _ = shutdown_rx.changed() => {
+                info!(%addr, "shutdown ricevuto");
+                return;
+            }
         }
     }
 }
@@ -41,11 +53,10 @@ pub async fn run_echo_server(listener: TcpListener, mut shutdown_rx: watch::Rece
     let mut join_set: JoinSet<()> = JoinSet::new();
 
     while let Some((socket, addr)) = accept_or_shutdown(&listener, &mut shutdown_rx).await {
-        println!("[INFO] Connessione da {addr}");
         let rx = shutdown_rx.clone();
-        join_set.spawn(handle_client(socket, rx));
+        join_set.spawn(handle_client(socket, addr, rx));
     }
 
-    println!("[INFO] Accept loop chiuso — attendo task attivi...");
+    info!("accept loop chiuso — attendo task attivi...");
     while join_set.join_next().await.is_some() {}
 }

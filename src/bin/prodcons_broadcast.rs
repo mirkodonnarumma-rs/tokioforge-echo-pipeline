@@ -1,8 +1,16 @@
 use tokio::sync::broadcast;
 use tokio::time::{sleep, Duration};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
     let (tx, _) = broadcast::channel::<String>(8);
 
     let mut handles = Vec::new();
@@ -12,14 +20,14 @@ async fn main() {
             loop {
                 match rx.recv().await {
                     Ok(msg) => {
-                        println!("[C{id}] Ricevuto: {msg}");
+                        info!(consumer = id, msg, "ricevuto");
                         sleep(Duration::from_millis(delay_ms)).await;
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        println!("[C{id}] WARNING: persi {n} messaggi (buffer overflow)");
+                        warn!(consumer = id, persi = n, "buffer overflow — messaggi persi");
                     }
                     Err(broadcast::error::RecvError::Closed) => {
-                        println!("[C{id}] Canale chiuso — uscita.");
+                        info!(consumer = id, "canale chiuso — uscita");
                         break;
                     }
                 }
@@ -29,7 +37,7 @@ async fn main() {
 
     for i in 0..20u32 {
         let msg = format!("msg-{i:02}");
-        println!("[P] Invio: {msg}");
+        info!(msg, "producer: invio");
         tx.send(msg).unwrap();
         sleep(Duration::from_millis(10)).await;
     }
@@ -38,5 +46,5 @@ async fn main() {
     for h in handles {
         h.await.unwrap();
     }
-    println!("[P] Tutti i consumer terminati.");
+    info!("tutti i consumer terminati");
 }
