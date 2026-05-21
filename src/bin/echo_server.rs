@@ -1,56 +1,30 @@
 use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::watch;
 use tokio::signal;
+use tokio::sync::watch;
+use tokio_lab::run_echo_server;
+
+fn log(level: &str, msg: &str) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (h, m, s) = ((secs % 86400) / 3600, (secs % 3600) / 60, secs % 60);
+    println!("[{h:02}:{m:02}:{s:02} {level}] {msg}");
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    // Canale watch: il valore `false` diventa `true` quando si vuole lo shutdown
+    log("INFO", "Server in ascolto su 127.0.0.1:8080");
+
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let server = tokio::spawn(run_echo_server(listener, shutdown_rx));
 
-    println!("Echo server su :8080 — Ctrl+C per shutdown");
+    signal::ctrl_c().await?;
+    log("INFO", "Ctrl+C ricevuto — shutdown in corso...");
+    let _ = shutdown_tx.send(true);
 
-    loop {
-        tokio::select! {
-            // Ramo 1: nuova connessione
-            result = listener.accept() => {
-                let (mut socket, addr) = result?;
-                let mut rx = shutdown_rx.clone(); // clone del receiver (economico)
-
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 1024];
-                    loop {
-                        tokio::select! {
-                            // Ramo A: dati dal client
-                            result = socket.read(&mut buf) => {
-                                match result {
-                                    Ok(0) | Err(_) => return,
-                                    Ok(n) => {
-                                        if socket.write_all(&buf[..n]).await.is_err() {
-                                            return;
-                                        }
-                                    }
-                                }
-                            }
-                            // Ramo B: segnale di shutdown
-                            _ = rx.changed() => {
-                                println!("{addr}: shutdown ricevuto");
-                                return; // il drop di `socket` chiude la connessione
-                            }
-                        }
-                    }
-                });
-            }
-            // Ramo 2: segnale Ctrl+C
-            _ = signal::ctrl_c() => {
-                println!("\nShutdown in corso...");
-                let _ = shutdown_tx.send(true);
-                break; // esci dal loop di accept
-            }
-        }
-    }
-    // A questo punto i task vedranno il segnale e termineranno.
-    // Per un shutdown più pulito si può usare JoinSet e attendere tutti i task.
+    server.await?;
+    log("INFO", "Server fermato.");
     Ok(())
 }
